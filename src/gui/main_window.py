@@ -9,6 +9,7 @@ import src.gui.pages as Pages
 from src.controllers.web_request_handler import is_update_available
 from src.controllers.translator import Translator
 import src.controllers.video_handler as video_handler
+from src.controllers.files_handler import get_bundle_files
 
 from src.devicemanagement.constants import Version
 from src.devicemanagement.device_manager import DeviceManager
@@ -16,22 +17,45 @@ from src.devicemanagement.device_manager import DeviceManager
 from src.gui.dialogs import GestaltDialog, UpdateAppDialog
 from src.gui.pages.reset_dialog import ResetDialog
 from src.gui.apply_worker import ApplyThread, ApplyAlertMessage, RefreshDevicesThread, set_sudo_pwd, set_sudo_complete, get_sudo_pwd
+from src.gui.navigation_controller import NavigationController
+from src.gui.busy_overlay import BusyOverlay
+from src.gui.qml_shell import QmlShell
+from PySide6.QtQuickWidgets import QQuickWidget
 from src.gui.pages.pages_list import Page
 from src.restore.bookrestore import BookRestoreFileTransferMethod, BookRestoreApplyMethod
 
 from src.tweaks.tweaks import tweaks, TweakID
+from src.core.composition import AppContext, build_app_context
 
 App_Version = "7.3.1"
 App_Build = 0
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self, device_manager: DeviceManager, translator: Translator):
+    def __init__(self, device_manager: DeviceManager, translator: Translator, app_context: Optional[AppContext] = None):
         super(MainWindow, self).__init__()
         self.device_manager = device_manager
         self.translator = translator
         self.settings = self.translator.settings
+        self.app_context = app_context if app_context is not None else build_app_context(device_manager)
+        self.app_state = self.app_context.app_state
+        self.use_cases = self.app_context.use_cases
         self.ui = Ui_Nugget()
         self.ui.setupUi(self)
+        self.navigation = NavigationController(self.ui.pages)
+        self.busy_overlay = BusyOverlay(self.ui.centralwidget)
+        self.busy_overlay.sync_geometry()
+        self.qml_shell = QmlShell(self.ui.centralwidget, self.app_state)
+        self.qml_shell.widget.setGeometry(700, 8, 286, 64)
+        self.qml_shell.widget.show()
+        self.qml_shell.bridge.navigateRequested.connect(lambda idx: self.navigation.navigate(idx))
+        self.settings_qml = QQuickWidget(self.ui.settingsPage)
+        self.settings_qml.rootContext().setContextProperty("shellBridge", self.qml_shell.bridge)
+        settings_qml_path = get_bundle_files("src/qml/pages/SettingsPage.qml")
+        self.settings_qml.setSource(QtCore.QUrl.fromLocalFile(settings_qml_path))
+        self.settings_qml.setGeometry(10, 10, 320, 120)
+        self.settings_qml.hide()
+        self.app_state.progressChanged.connect(self.busy_overlay.set_message)
+        self.app_state.busyChanged.connect(self._on_busy_changed)
         self.noneText = self.tr("None")
         self.apply_in_progress = False
         self.refresh_in_progress = False
@@ -131,6 +155,30 @@ class MainWindow(QtWidgets.QMainWindow):
             new_text = new_text.replace("%BETATAG", "")
         self.ui.appVersionLbl.setText(new_text)
 
+    def _on_busy_changed(self, is_busy: bool):
+        if is_busy:
+            self.busy_overlay.sync_geometry()
+            self.busy_overlay.show()
+        else:
+            self.busy_overlay.hide()
+
+    def navigate_to(self, page: Page):
+        self.app_state.currentPage = page.value
+        self.settings_qml.setVisible(page == Page.Settings)
+        self.navigation.navigate(page.value)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.busy_overlay.sync_geometry()
+
+    def closeEvent(self, event):
+        for thread_name in ["refresh_worker_thread", "worker_thread"]:
+            thread = getattr(self, thread_name, None)
+            if thread is not None and thread.isRunning():
+                thread.terminate()
+                thread.wait(1000)
+        super().closeEvent(event)
+
 
     ## DEVICE BAR FUNCTIONS
     @QtCore.Slot()
@@ -138,7 +186,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.refresh_in_progress:
             self.refresh_in_progress = True
             self.ui.refreshBtn.setDisabled(True)
-            self.refresh_worker_thread = RefreshDevicesThread(manager=self.device_manager, settings=self.settings)
+            self.refresh_worker_thread = RefreshDevicesThread(
+                manager=self.device_manager,
+                settings=self.settings,
+                use_cases=self.use_cases
+            )
             self.refresh_worker_thread.alert.connect(self.alert_message)
             self.refresh_worker_thread.finished.connect(self.refresh_devices_finished)
             self.refresh_worker_thread.finished.connect(self.refresh_worker_thread.deleteLater)
@@ -162,9 +214,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.restoreProgressBar.hide()
 
         if len(self.device_manager.devices) == 0:
+            self.app_state.canApply = False
             self.ui.devicePicker.setEnabled(False)
             self.ui.devicePicker.addItem(self.noneText)
-            self.ui.pages.setCurrentIndex(Page.Home.value)
+            self.navigate_to(Page.Home)
             self.ui.homePageBtn.setChecked(True)
 
             # hide all pages
@@ -192,6 +245,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui.pocketPosterHelperBtn.hide()
             self.ui.showRiskyChk.hide()
         else:
+            self.app_state.canApply = True
             self.ui.devicePicker.setEnabled(True)
             # populate the ComboBox with device names
             for device in self.device_manager.devices:
@@ -373,12 +427,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.initial_load = False
                 if len(tweaks[TweakID.PosterBoard].tendies) > 0:
                     self.pages[Page.Posterboard].load()
-                    self.ui.pages.setCurrentIndex(Page.Posterboard.value)
+                    self.navigate_to(Page.Posterboard)
                     self.ui.posterboardPageBtn.setChecked(True)
                     self.ui.homePageBtn.setChecked(False)
                 elif len(tweaks[TweakID.Templates].templates) > 0:
                     self.pages[Page.Templates].load()
-                    self.ui.pages.setCurrentIndex(Page.Templates.value)
+                    self.navigate_to(Page.Templates)
                     self.ui.templatePageBtn.setChecked(True)
                     self.ui.homePageBtn.setChecked(False)
 
@@ -395,10 +449,12 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.device_manager.set_current_device(index=None)
             self.update_mga_label()
+            self.app_state.selectedDevice = self.noneText
 
         # update the interface
         self.updateInterfaceForNewDevice()
         if index > -1:
+            self.app_state.selectedDevice = self.device_manager.get_current_device_name()
             self.warn_for_dev_beta()
 
     def loadSettings(self):
@@ -461,67 +517,67 @@ class MainWindow(QtWidgets.QMainWindow):
 
     ## SIDE BAR FUNCTIONS
     def on_homePageBtn_clicked(self):
-        self.ui.pages.setCurrentIndex(Page.Home.value)
+        self.navigate_to(Page.Home)
     
     def on_gestaltPageBtn_clicked(self):
         self.pages[Page.Gestalt].load()
         self.ui.mgaScrollArea.verticalScrollBar().setValue(0) # reset scroll to top
-        self.ui.pages.setCurrentIndex(Page.Gestalt.value)
+        self.navigate_to(Page.Gestalt)
 
     def on_featureFlagsPageBtn_clicked(self):
         self.pages[Page.FeatureFlags].load()
-        self.ui.pages.setCurrentIndex(Page.FeatureFlags.value)
+        self.navigate_to(Page.FeatureFlags)
     
     def on_euEnablerPageBtn_clicked(self):
         self.pages[Page.EUEnabler].load()
-        self.ui.pages.setCurrentIndex(Page.EUEnabler.value)
+        self.navigate_to(Page.EUEnabler)
 
     def on_statusBarPageBtn_clicked(self):
         self.pages[Page.StatusBar].load()
         self.ui.sbScrollArea.verticalScrollBar().setValue(0) # reset scroll to top
-        self.ui.pages.setCurrentIndex(Page.StatusBar.value)
+        self.navigate_to(Page.StatusBar)
 
     def on_springboardOptionsPageBtn_clicked(self):
         self.pages[Page.Springboard].load()
-        self.ui.pages.setCurrentIndex(Page.Springboard.value)
+        self.navigate_to(Page.Springboard)
 
     def on_internalOptionsPageBtn_clicked(self):
         self.pages[Page.InternalOptions].load()
-        self.ui.pages.setCurrentIndex(Page.InternalOptions.value)
+        self.navigate_to(Page.InternalOptions)
 
     def on_liquidGlassPageBtn_clicked(self):
         self.pages[Page.LiquidGlass].load()
-        self.ui.pages.setCurrentIndex(Page.LiquidGlass.value)
+        self.navigate_to(Page.LiquidGlass)
 
     def on_daemonsPageBtn_clicked(self):
         self.pages[Page.Daemons].load()
-        self.ui.pages.setCurrentIndex(Page.Daemons.value)
+        self.navigate_to(Page.Daemons)
 
     def on_posterboardPageBtn_clicked(self):
         self.pages[Page.Posterboard].load()
-        self.ui.pages.setCurrentIndex(Page.Posterboard.value)
+        self.navigate_to(Page.Posterboard)
 
     def on_templatesPageBtn_clicked(self):
         self.pages[Page.Templates].load()
-        self.ui.pages.setCurrentIndex(Page.Templates.value)
+        self.navigate_to(Page.Templates)
 
     def on_passcodePageBtn_clicked(self):
         self.pages[Page.Passcode].load()
-        self.ui.pages.setCurrentIndex(Page.Passcode.value)
+        self.navigate_to(Page.Passcode)
 
     def on_advancedPageBtn_clicked(self):
         self.pages[Page.RiskyTweaks].load()
-        self.ui.pages.setCurrentIndex(Page.RiskyTweaks.value)
+        self.navigate_to(Page.RiskyTweaks)
 
     def on_miscOptionsBtn_clicked(self):
-        self.ui.pages.setCurrentIndex(Page.MiscOptions.value)
+        self.navigate_to(Page.MiscOptions)
 
     def on_applyPageBtn_clicked(self):
-        self.ui.pages.setCurrentIndex(Page.Apply.value)
+        self.navigate_to(Page.Apply)
 
     def on_settingsPageBtn_clicked(self):
         self.pages[Page.Settings].load()
-        self.ui.pages.setCurrentIndex(Page.Settings.value)
+        self.navigate_to(Page.Settings)
 
     def update_side_btn_color(self, btn: QtWidgets.QToolButton, toggled: bool):
         if toggled:
@@ -592,7 +648,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.apply_in_progress:
             self.apply_in_progress = True
             self.toggle_thread_btns(disabled=True)
-            self.worker_thread = ApplyThread(manager=self.device_manager, settings=self.settings, reset_pages=reset_pages)
+            self.worker_thread = ApplyThread(
+                manager=self.device_manager,
+                settings=self.settings,
+                reset_pages=reset_pages,
+                use_cases=self.use_cases,
+                app_state=self.app_state
+            )
             self.worker_thread.progress.connect(self.ui.statusLbl.setText)
             self.worker_thread.alert.connect(self.alert_message)
             self.worker_thread.finished.connect(self.finish_apply_thread)

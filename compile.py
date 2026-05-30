@@ -13,6 +13,8 @@ args = [
     '--name=Nugget',
     '--icon=nugget.ico',
     '--onedir',
+    '--clean',
+    '--log-level=ERROR',
     '--noconfirm',
     '--collect-all=pymobiledevice3',  # <--- FIXED: Forces inclusion of __main__.py
     '--add-data=files/:files',
@@ -23,7 +25,18 @@ args = [
     '--hidden-import=zeroconf._handlers.answers',
     '--hidden-import=inquirer',
     '--hidden-import=readchar',
-    '--copy-metadata=readchar'
+    '--copy-metadata=readchar',
+    '--exclude-module=torch',
+    '--exclude-module=torchaudio',
+    '--exclude-module=torchvision',
+    '--exclude-module=tensorflow',
+    '--exclude-module=onnxruntime',
+    '--exclude-module=transformers',
+    '--exclude-module=scipy',
+    '--exclude-module=sklearn',
+    '--exclude-module=pandas',
+    '--exclude-module=matplotlib',
+    '--exclude-module=tkinter',
 ]
 
 if target_arch:
@@ -60,6 +73,7 @@ elif os.name == 'nt':
     args.append('--version-file=version.txt')
     args.append('--add-binary=status_setter_windows.exe;.')
     args.append('--add-data=nugget.ico;.')
+    args.append('--add-data=src/qml;src/qml')
     
     try:
         import pytun_pmd3
@@ -76,7 +90,7 @@ elif os.name == 'nt':
 
     if os.path.isdir("ffmpeg/bin"):
         args.append('--add-data=ffmpeg/bin;ffmpeg/bin')
-    else:
-        print("[!] ffmpeg not bundled: folder not found")
+else:
+    args.append('--add-data=src/qml/:src/qml')
 
 PyInstaller.__main__.run(args)

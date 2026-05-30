@@ -14,6 +14,7 @@ from PySide6.QtCore import QSettings
 from src.controllers.translator import Translator
 from src.gui.main_window import MainWindow
 from src.devicemanagement.device_manager import DeviceManager
+from src.core.composition import build_app_context
 from src.tweaks.tweaks import tweaks, TweakID
 
 if __name__ == "__main__":
@@ -61,6 +62,7 @@ if __name__ == "__main__":
     dm = DeviceManager()
 
     settings = QSettings("Nugget", "settings")
+    app_context = build_app_context(dm, settings=settings)
     translator = Translator(app, settings)
     translator.set_default_locale(translator.get_saved_locale_code())
     translator.load_translations()
@@ -68,7 +70,7 @@ if __name__ == "__main__":
     icon_path = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(__file__)), "nugget.ico")
     app.setWindowIcon(QtGui.QIcon(icon_path))
 
-    widget = MainWindow(device_manager=dm, translator=translator)
+    widget = MainWindow(device_manager=dm, translator=translator, app_context=app_context)
     translator.fix_ui_for_rtl(widget.ui)
     widget.resize(800, 600)
     widget.show()

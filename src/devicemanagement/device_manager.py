@@ -568,31 +568,53 @@ class DeviceManager:
         if progress != None:
             prog = f" ({progress:6.1f}% )"
         self.update_label(QCoreApplication.tr("Restoring to device...{0}{1}").format(prog, self.do_not_unplug))
+
+    def _load_gestalt_plist(self):
+        if self.data_singleton.gestalt_path is None:
+            return None
+        if self.data_singleton.gestalt_path == self.data_singleton.SAVED_GESTALT_STRING:
+            return self.pref_manager.get_mga_data(self.get_current_device_udid())
+        with open(self.data_singleton.gestalt_path, 'rb') as in_fp:
+            return plistlib.load(in_fp)
+
+    def _create_apply_context(self):
+        return {
+            "flag_plist": {},
+            "eligibility_files": None,
+            "ai_file": None,
+            "basic_plists": {},
+            "basic_plists_ownership": {},
+            "files_data": {},
+            "uses_domains": False,
+            "use_bookrestore": False,
+            "files_to_restore": [],
+            "tmp_dirs": [],
+        }
+
+    def _cleanup_tmp_dirs(self, tmp_dirs):
+        for tmp_dir in tmp_dirs:
+            try:
+                tmp_dir.cleanup()
+            except Exception as e:
+                print(str(e))
+
     def apply_changes(self, update_label=lambda x: None, show_alert=lambda x: None):
         try:
             # set the tweaks and apply
             # first open the file in read mode
             update_label(QCoreApplication.tr("Applying changes to files..."))
-            gestalt_plist = None
-            if self.data_singleton.gestalt_path != None:
-                if self.data_singleton.gestalt_path == self.data_singleton.SAVED_GESTALT_STRING:
-                    gestalt_plist = self.pref_manager.get_mga_data(self.get_current_device_udid())
-                else:
-                    with open(self.data_singleton.gestalt_path, 'rb') as in_fp:
-                        gestalt_plist = plistlib.load(in_fp)
-            # create the other plists
-            flag_plist: dict = {}
-            eligibility_files = None
-            ai_file = None
-            basic_plists: dict = {}
-            basic_plists_ownership: dict = {}
-            files_data: dict = {}
-            uses_domains: bool = False
-            use_bookrestore: bool = False
-            # create the restore file list
-            files_to_restore: list[FileToRestore] = [
-            ]
-            tmp_dirs = [] # temporary directory for unzipping pb and template files
+            gestalt_plist = self._load_gestalt_plist()
+            ctx = self._create_apply_context()
+            flag_plist = ctx["flag_plist"]
+            eligibility_files = ctx["eligibility_files"]
+            ai_file = ctx["ai_file"]
+            basic_plists = ctx["basic_plists"]
+            basic_plists_ownership = ctx["basic_plists_ownership"]
+            files_data = ctx["files_data"]
+            uses_domains = ctx["uses_domains"]
+            use_bookrestore = ctx["use_bookrestore"]
+            files_to_restore = ctx["files_to_restore"]
+            tmp_dirs = ctx["tmp_dirs"]
 
             # set the plist keys
             for tweak_name in tweaks:
@@ -760,12 +782,7 @@ class DeviceManager:
         finally:
             close_dl_connection()
             if len(tmp_dirs) > 0:
-                for tmp_dir in tmp_dirs:
-                    try:
-                        tmp_dir.cleanup()
-                    except Exception as e:
-                        # ignore clean up errors
-                        print(str(e))
+                self._cleanup_tmp_dirs(tmp_dirs)
             show_alert(final_alert)
 
     ## RESETTING TWEAKS

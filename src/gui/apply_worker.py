@@ -2,8 +2,6 @@ from PySide6.QtCore import Signal, QThread, QSettings
 from PySide6.QtWidgets import QMessageBox
 from typing import Optional
 
-from src.gui.pages.pages_list import Page
-
 # Global Vars
 sudo_pwd = None # reset this variable whenever it is used
 sudo_action_complete = False
@@ -41,13 +39,21 @@ class ApplyThread(QThread):
     def alert_window(self, msg: ApplyAlertMessage):
         self.alert.emit(msg)
     
-    def __init__(self, manager, settings: QSettings, reset_pages: Optional[list[Page]] = None):
+    def __init__(self, manager=None, settings: QSettings = None, reset_pages: Optional[list] = None, use_cases=None, app_state=None):
         super().__init__()
         self.manager = manager
         self.settings = settings
         self.reset_pages = reset_pages
+        self.use_cases = use_cases
+        self.app_state = app_state
 
     def do_work(self):
+        if self.use_cases is not None:
+            if self.reset_pages is None:
+                self.use_cases.apply(self.update_label, self.alert_window)
+            else:
+                self.use_cases.reset(self.reset_pages, self.settings, self.update_label, self.alert_window)
+            return
         if self.reset_pages == None:
             # applying tweaks
             self.manager.apply_changes(self.update_label, self.alert_window)
@@ -64,13 +70,17 @@ class RefreshDevicesThread(QThread):
     def alert_window(self, msg: ApplyAlertMessage):
         self.alert.emit(msg)
 
-    def __init__(self, manager, settings):
+    def __init__(self, manager=None, settings=None, use_cases=None):
         super().__init__()
         self.manager = manager
         self.settings = settings
+        self.use_cases = use_cases
 
     def do_work(self):
-        self.manager.get_devices(self.settings, self.alert_window)
+        if self.use_cases is not None:
+            self.use_cases.refresh_devices(self.settings, self.alert_window)
+        else:
+            self.manager.get_devices(self.settings, self.alert_window)
 
     def run(self):
         self.do_work()

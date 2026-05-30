@@ -47,6 +47,8 @@
         <file>icon/translate.svg</file>
         <file>icon/liquid-glass.svg</file>
         <file>icon/lock.svg</file>
+        <file>../qml/Shell.qml</file>
+        <file>../qml/pages/SettingsPage.qml</file>
     </qresource>
     <qresource prefix="/translations">
         <file>translations/Nugget_en.qm</file>
